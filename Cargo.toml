@@ -1,0 +1,11 @@
+[package]
+authors = ["Tim Ryan <tim@timryan.org>"]
+description = "A pager written in Rust."
+name = "rager"
+version = "0.1.0"
+[dependencies]
+crossbeam-channel = "0.1.2"
+libc = "0.2.40"
+
+[dependencies.pancurses]
+git = "https://github.com/Crides/pancurses/"
