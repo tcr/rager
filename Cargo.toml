@@ -6,6 +6,8 @@ version = "0.1.0"
 [dependencies]
 crossbeam-channel = "0.1.2"
 libc = "0.2.40"
+ncurses = "5.91.0"
+vte = "0.3.2"
 
 [dependencies.pancurses]
 git = "https://github.com/Crides/pancurses/"
