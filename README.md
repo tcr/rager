@@ -2,7 +2,10 @@
 
 A terminal Pager written in Rust. Like more or less.
 
-Supports any `xterm`-supporting terminal thanks to Termion. Only supports content over stdin (for now). Scroll or up/down keys to move, `q` or Ctrl+C to quit.
+* Supports any `xterm`-supporting terminal thanks to Termion.
+* Support mouse scrolling (or up/down keys)
+* Only supports content over stdin (for now).
+* `q` or Ctrl+C to quit.
 
 ```
 cargo install rager
