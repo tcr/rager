@@ -1,5 +1,7 @@
 # rager 🎉
 
+[![](http://meritbadge.herokuapp.com/rager)](https://crates.io/crates/rager)
+
 A terminal Pager written in Rust. Like more or less.
 
 * Supports any `xterm`-supporting terminal thanks to Termion.
