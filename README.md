@@ -9,6 +9,8 @@ cargo install rager
 cargo build --color=always |& rager
 ```
 
+![](https://user-images.githubusercontent.com/80639/39799598-cea19382-5332-11e8-9c94-367ec317123f.png)
+
 ## License
 
 MIT or Apache-2.0, at your option.

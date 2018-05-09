@@ -6,6 +6,8 @@ license = "MIT OR Apache-2.0"
 name = "rager"
 repository = "http://github.com/tcr/rager"
 version = "0.2.0"
+readme = "README.md"
+
 [dependencies]
 crossbeam-channel = "0.1.2"
 failure = "0.1.1"
