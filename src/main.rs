@@ -1,237 +1,282 @@
-#![feature(io)]
-
+extern crate termion;
+extern crate ransid;
+extern crate failure;
 extern crate libc;
-extern crate pancurses;
-extern crate ncurses;
 extern crate crossbeam_channel;
-extern crate vte;
 
-use std::env;
+use failure::Error;
+use termion::event::*;
+use termion::scroll;
+use termion::input::{TermRead, MouseTerminal};
+use termion::raw::IntoRawMode;
+use termion::terminal_size;
+use termion::screen::*;
+use std::io::{Write, stdout, stdin, Stdout};
+use crossbeam_channel::unbounded;
+
 use std::fs::File;
 use std::io::prelude::*;
+// use std::cell::RefCell;
+use std::io::BufReader;
+// use std::sync::Arc;
+use termion::raw::RawTerminal;
 
-use crossbeam_channel::unbounded;
-use pancurses::{ALL_MOUSE_EVENTS, A_BOLD, A_COLOR, COLOR_BLACK, COLOR_RED, A_NORMAL, endwin, getmouse, cbreak, init_pair, initscr, mousemask, half_delay, Input, noecho, newpad, Window};
+// fn write_alt_screen_msg<W: Write>(screen: &mut W) {
+//     write!(screen, "{}{}Welcome to the alternate screen.{}Press '1' to switch to the main screen or '2' to switch to the alternate screen.{}Press 'q' to exit (and switch back to the main screen).",
+//            termion::clear::All,
+//            termion::cursor::Goto(1, 1),
+//            termion::cursor::Goto(1, 3),
+//            termion::cursor::Goto(1, 4)).unwrap();
+// }
 
-struct DisplayPad {
-    pad: Window,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-    vte_parser: Option<vte::Parser>,
+enum RagerEvent {
+    Line(Vec<u8>),
+    // Char(char, usize, usize, bool, bool, ransid::color::Color),
+    ScrollDown,
+    ScrollUp,
+    Quit,
+    // Resize
 }
 
-impl DisplayPad {
-    fn new(width: i32) -> DisplayPad {
-        let height = 32767;
-        let mut pad = DisplayPad {
-            pad: newpad(height, width),
-            x: 1,
-            y: 0,
+
+#[derive(Copy, Clone)]
+struct RagerChar(char, bool, bool, ransid::color::Color);
+
+struct Vec2D<T>(usize, usize, T, Vec<Vec<T>>);
+
+impl<T: Copy> Vec2D<T> {
+    fn new(width: usize, height: usize, default: T) -> Vec2D<T> {
+        Vec2D(
             width,
             height,
-            vte_parser: Some(vte::Parser::new()),
-        };
-        init_pair(0, COLOR_BLACK, COLOR_RED);
-        pad.clear();
-        pad
+            default,
+            (0..height).map(|x| vec![default; width]).collect::<Vec<_>>(),
+        )
     }
 
-    fn clear(&mut self) {
-        self.pad.bkgd(' ');
+    fn expand_vertical(&mut self) {
+        let width = self.0;
+        let height = self.1;
+        // let new_height = ((height as f32) * 1.4) as usize;;
+        // self.1 = new_height;
+        self.1 += 1;
+
+        // for _ in 0..(new_height - height) {
+            self.3.push(vec![self.2; width]);
+        // }
     }
 
-    fn append(&mut self, value: &str) {
-        if self.y > self.height {
-            // ignore
-            return;
-        }
-
-        // eprint!("---#> {:?} ", value.len());
-        let mut parser = self.vte_parser.take().unwrap();
-        for b in value.bytes() {
-            parser.advance(self, b);
-        }
-
-        self.vte_parser = Some(parser)
-    }
-}
-
-impl vte::Perform for DisplayPad {
-    fn print(&mut self, c: char) {
-        let mut a = String::new();
-        a.push(c);
-        // eprint!("{:?} ", a);
-        self.pad.printw(&a);
-    }
-
-    fn execute(&mut self, byte: u8) {
-        match byte {
-            b'\n' | b'\r' | 0x8 => {
-                let mut a = String::new();
-                a.push(byte as char);
-                self.pad.printw(&a);
-            }
-            _ => {
-                eprint!("#E{}# ", byte);
+    fn set(&mut self, x: usize, y: usize, val: T) {
+        if y >= self.height() {
+            for _ in 0..(y - self.height() + 1) {
+                self.expand_vertical();
             }
         }
-    }
-    
-    fn hook(&mut self, params: &[i64], intermediates: &[u8], ignore: bool) {
-        eprint!("#H# ");
-    }
-    
-    fn put(&mut self, byte: u8) {
-        // let mut a = String::new();
-        // self.pad.printw(&a);
-        eprint!("#P# ");
-    }
-    
-    fn unhook(&mut self) {
-        eprint!("#U# ");
+        self.3[y][x] = val;
     }
 
-    fn osc_dispatch(&mut self, params: &[&[u8]]) {
-        eprint!("#O# ");
-    }
-    
-    fn csi_dispatch(
-        &mut self, 
-        params: &[i64], 
-        intermediates: &[u8], 
-        ignore: bool, 
-        c: char
-    ) { 
-        // eprint!("#C {} {:?} {:?}# ", c, params, intermediates);
-        if c == 'm' {
-            match params[0] {
-                0 => {
-                }
-                32 => {
-                    // self.pad.chgat(-1, A_BOLD, 0);
-                    // self.pad.attron(A_BOLD);
-                }
-                _ => {},
-            }
-        }
+    fn get(&self, x: usize, y: usize) -> T {
+        self.3[y][x]
     }
 
-    fn esc_dispatch(
-        &mut self, 
-        params: &[i64], 
-        intermediates: &[u8], 
-        ignore: bool, 
-        byte: u8
-    ) { 
-        eprint!("#S# ");
+    fn width(&self) -> usize {
+        self.0
+    }
+
+    fn height(&self) -> usize {
+        self.1
     }
 }
 
 fn main() {
-    let window = initscr();
+    run().expect("Program error");
+}
 
-    window.keypad(true); // Set keypad mode
-    mousemask(ALL_MOUSE_EVENTS, std::ptr::null_mut()); // Listen to all mouse events
+fn run() -> Result<(), Error> {
+    let stdin = stdin();
 
-    // window.printw("Click in the terminal, press q to exit\n");
-    noecho();
-    cbreak();
-    window.refresh();
+    // Swap stdin and TTY
+    let mut input = if !termion::is_tty(&stdin) {
+        // https://stackoverflow.com/a/29694013
+        unsafe {
+            use std::os::unix::io::*;
 
-    let max_x = window.get_max_x();
-    let max_y = window.get_max_y();
+            let tty = File::open("/dev/tty").unwrap();
 
-    pancurses::mouseinterval(0);
+            let stdin_fd = libc::dup(0);
 
-    // let mut f = File::open("ok").expect("file not found");
+            let ret = File::from_raw_fd(stdin_fd);
 
-    // let mut contents = String::new();
-    // f.read_to_string(&mut contents)
-    //     .expect("something went wrong reading the file");
+            libc::dup2(tty.as_raw_fd(), 0);
 
-    let mut pad = DisplayPad::new(max_x);
-
-    // unsafe {
-    //     use std::os::unix::io::AsRawFd;
-    //     let f = File::open("/dev/tty").unwrap();
-    //     libc::dup2(f.as_raw_fd(), 0);
-    // }
-
-    // https://stackoverflow.com/a/29694013
-    let mut stdin = unsafe {
-        use std::os::unix::io::*;
-
-        let tty = File::open("/dev/tty").unwrap();
-
-        let stdin_fd = libc::dup(0);
-
-        let ret = File::from_raw_fd(stdin_fd);
-
-        libc::dup2(tty.as_raw_fd(), 0);
-
-        ret
+            Some(ret)
+        }
+    } else {
+        None
     };
 
-    let (tx, rx) = unbounded::<String>();
-    ::std::thread::spawn(move || {
-        let buf = ::std::io::BufReader::new(&mut stdin);
-        // println!("start\r");
-        for c in buf.lines() {
-            if let Ok(c) = c {
-                tx.send(format!("{}", c));
+    let mut screen = MouseTerminal::from(AlternateScreen::from(stdout().into_raw_mode().unwrap()));
+    write!(screen, "{}", termion::cursor::Hide).unwrap();
+    // write_alt_screen_msg(&mut screen);
+
+    write!(screen, "{}", termion::clear::All).unwrap();
+
+    screen.flush().unwrap();
+
+    // Load the file
+    // let mut file = File::open("test")?;
+    // let mut contents = vec![];
+    // file.read_to_end(&mut contents)?;
+
+    // Create the ransid terminal
+    let (width, height) = terminal_size().unwrap();
+
+    type MyTerminal = MouseTerminal<AlternateScreen<RawTerminal<Stdout>>>;
+
+    let (tx, rx) = unbounded();
+    let actor = ::std::thread::spawn({
+        // let screen = screen.clone();
+        let tx = tx.clone();
+        move || {
+            let mut console = ransid::Console::new(width as usize, 32767);
+
+            let mut matrix = Vec2D::new(width as usize, height as usize, RagerChar(' ', false, false, ransid::color::Color::Ansi(0)));
+
+            fn write_char(screen: &mut MyTerminal, c: RagerChar, x: usize, y: usize) {
+                // ::std::thread::sleep(::std::time::Duration::from_millis(1));
+                write!(screen,
+                    "{}{}{}{}{}",
+                    termion::cursor::Goto((x as u16) + 1, (y as u16) + 1),
+                    if c.1 { format!("{}", termion::style::Bold) } else { format!("") },
+                    match c.3 {
+                        ransid::color::Color::Ansi(c) => format!("{}", termion::color::Fg(termion::color::AnsiValue(c))),
+                        ransid::color::Color::TrueColor(r, g, b) => format!("{}", termion::color::Fg(termion::color::Rgb(r, g, b))),
+                    },
+                    c.0,
+                    termion::style::Reset,
+                );
             }
+
+            let update = |screen: &mut MyTerminal, matrix: &mut Vec2D<RagerChar>, c, x, y, bold, underlined, color| {
+                
+                let c = RagerChar(c, bold, underlined, color);
+                matrix.set(x, y, c);
+                
+                if y < (height as usize) {
+                    write_char(screen, c, x, y);
+                }
+            };
+
+            let mut scroll: usize = 0;
+            while let Ok(event) = rx.recv() {
+                // let screen = Arc::new(RefCell::new(screen));
+
+                // TODO
+                // screen.borrow_mut().flush().unwrap();
+                match event {
+                    RagerEvent::Line(line) => {
+                        let tx = tx.clone();
+                        unsafe {
+                            let screen: &'static mut MyTerminal = ::std::mem::transmute(&mut screen);
+                            let matrix: &'static mut Vec2D<RagerChar> = ::std::mem::transmute(&mut matrix);
+                            console.write(&line, move |event| {
+                                // TODO this should have a fix right here for the closure to fit into a non-static content, instead of transmuting the value
+                                use ransid::Event;
+                                match event {
+                                    Event::Char {
+                                        x,
+                                        y,
+                                        c,
+                                        bold,
+                                        underlined,
+                                        color,
+                                    } => {
+                                        update(screen, matrix, c, x, y, bold, underlined, color);
+                                    },
+
+                                    // Ignore all other event types.
+                                    _ => {},
+                                }
+                            });
+                        }
+                    }
+                    RagerEvent::ScrollDown => {
+                        if scroll > 0 {
+                            write!(screen, "{}", scroll::Down(1)).unwrap();
+
+                            scroll -= 1;
+
+                            // Draw row
+                            let matrix_width = matrix.width() as usize;
+                            let matrix_height = matrix.height() as usize;
+                            for x in 0..matrix_width {
+                                write_char(&mut screen, matrix.get(x, scroll), x, 0);
+                            }
+                        }
+                    }
+                    RagerEvent::ScrollUp => {
+                        if scroll + (height as usize) < matrix.height() - 1 {
+                            write!(screen, "{}", scroll::Up(1)).unwrap();
+
+                            scroll += 1;
+
+                            // Draw row
+                            let matrix_width = matrix.width() as usize;
+                            let matrix_height = matrix.height() as usize;
+                            for x in 0..matrix_width {
+                                write_char(&mut screen, matrix.get(x, scroll + height as usize), x, matrix_height);
+                            }
+                        }
+
+                    }
+                    RagerEvent::Quit => break,
+                }
+                screen.flush().unwrap();
+            }
+
+            write!(screen, "{}", termion::cursor::Show).unwrap();
+            screen.flush().unwrap();
         }
     });
 
-    let mut value: isize = 0;
-
-    // os.dup2(f.fileno(), 0);
-
-    let mut scroll_pos = 0;
-    // pad.append(&contents);
-    window.nodelay(true);
-    loop {
-        pad.pad.prefresh(scroll_pos,0,0,0,max_y-1,max_x);
-        
-        match window.getch() {
-            Some(Input::KeyMouse) => {
-                if let Ok(mouse_event) = getmouse() {
-                    if mouse_event.bstate & (1 << 7) != 0 {
-                        if scroll_pos < 4000 {
-                            scroll_pos += 1;
-                        }
-                    }
-                    if mouse_event.bstate & (1 << 19) != 0 {
-                        if scroll_pos > 0 {
-                            scroll_pos -= 1;
-                        }
-                    }
-                    // window.mvprintw(1, 0, &format!("value: {}", value));
-                };
-            }
-            Some(Input::Character(x)) => {
-                if x == 'q' {
-                    break;
-                } else {
-                    println!("x {:?}", x);
+    if input.is_some() {
+        ::std::thread::spawn({
+            let tx = tx.clone();
+            let mut input = BufReader::new(input.unwrap());
+            let mut buf = vec![];
+            move || {
+                while let Ok(len) = input.read_until(0xA, &mut buf)  {
+                    let _ = tx.send(RagerEvent::Line(buf.clone()));
+                    buf.clear();
                 }
             }
-            // a => {
-            //     println!("a {:?}", a);
-            // }
-            None => {
-                if let Ok(c) = rx.try_recv() {
-                    pad.append(&c);
-                    pad.append("\n");
-                    window.refresh();
-                } else {
-                    ::std::thread::sleep(::std::time::Duration::from_millis(10));
-                }
-            }
-            _ => (),
-        }
+        });
     }
-    endwin();
+
+    for c in stdin.events() {
+        match c.unwrap() {
+            Event::Key(Key::Char('q')) |
+            Event::Key(Key::Ctrl('c')) => break,
+            Event::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) | 
+            Event::Key(Key::Down) => {
+                let _ = tx.send(RagerEvent::ScrollUp);
+                // write!(screen.borrow_mut(), "{}", scroll::Up(1)).unwrap();
+            }
+            Event::Mouse(MouseEvent::Press(MouseButton::WheelUp, _, _)) |
+            Event::Key(Key::Up) => {
+                let _ = tx.send(RagerEvent::ScrollDown);
+                // write!(screen.borrow_mut(), "{}", scroll::Down(1)).unwrap();
+            }
+            c => {
+                // write!(screen.borrow_mut(), "\r\n{:?}", c).unwrap();
+            }
+        }
+        // screen.borrow_mut().flush().unwrap();
+    }
+
+    let _ = tx.send(RagerEvent::Quit);
+
+    actor.join();
+
+    Ok(())
 }

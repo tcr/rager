@@ -1,13 +1,15 @@
 [package]
 authors = ["Tim Ryan <tim@timryan.org>"]
-description = "A pager written in Rust."
+description = "A pager written in Rust. Like more or less."
+documentation = "http://docs.rs/rager"
+license = "MIT OR Apache-2.0"
 name = "rager"
-version = "0.1.0"
+repository = "http://github.com/tcr/rager"
+version = "0.2.0"
 [dependencies]
 crossbeam-channel = "0.1.2"
+failure = "0.1.1"
 libc = "0.2.40"
-ncurses = "5.91.0"
-vte = "0.3.2"
+ransid = "0.4.6"
+termion = "1.5.1"
 
-[dependencies.pancurses]
-git = "https://github.com/Crides/pancurses/"

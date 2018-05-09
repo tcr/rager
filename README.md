@@ -1,11 +1,11 @@
-# rager
+# rager 🎉
 
-A prototype of a pager written in Rust.
+A terminal Pager written in Rust. Like more or less.
 
-Only supports macOS for now, only supports piped content on stdin.
+Supports any `xterm`-supporting terminal thanks to Termion. Only supports content over stdin (for now). Scroll or up/down keys to move, `q` or Ctrl+C to quit.
 
 ```
-cargo install git+https://github.com/tcr/rager
+cargo install rager
 cargo build --color=always |& rager
 ```
 
