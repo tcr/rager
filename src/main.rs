@@ -16,37 +16,29 @@ use crossbeam_channel::unbounded;
 
 use std::fs::File;
 use std::io::prelude::*;
-// use std::cell::RefCell;
 use std::io::BufReader;
-// use std::sync::Arc;
 use termion::raw::RawTerminal;
-
-// fn write_alt_screen_msg<W: Write>(screen: &mut W) {
-//     write!(screen, "{}{}Welcome to the alternate screen.{}Press '1' to switch to the main screen or '2' to switch to the alternate screen.{}Press 'q' to exit (and switch back to the main screen).",
-//            termion::clear::All,
-//            termion::cursor::Goto(1, 1),
-//            termion::cursor::Goto(1, 3),
-//            termion::cursor::Goto(1, 4)).unwrap();
-// }
 
 enum RagerEvent {
     Line(Vec<u8>),
-    // Char(char, usize, usize, bool, bool, ransid::color::Color),
     ScrollDown,
     ScrollUp,
     Quit,
-    // Resize
+    IncreaseFold,
+    DecreaseFold,
+    // Resize TODO
 }
 
 
 #[derive(Copy, Clone)]
 struct RagerChar(char, bool, bool, ransid::color::Color);
 
-struct Vec2D<T>(usize, usize, T, Vec<Vec<T>>);
+#[derive(Clone)]
+struct Buffer(usize, usize, RagerChar, Vec<Vec<RagerChar>>);
 
-impl<T: Copy> Vec2D<T> {
-    fn new(width: usize, height: usize, default: T) -> Vec2D<T> {
-        Vec2D(
+impl Buffer {
+    fn new(width: usize, height: usize, default: RagerChar) -> Buffer {
+        Buffer(
             width,
             height,
             default,
@@ -57,8 +49,6 @@ impl<T: Copy> Vec2D<T> {
     fn expand_vertical(&mut self) {
         let width = self.0;
         let height = self.1;
-        // let new_height = ((height as f32) * 1.4) as usize;;
-        // self.1 = new_height;
         self.1 += 1;
 
         // for _ in 0..(new_height - height) {
@@ -66,7 +56,28 @@ impl<T: Copy> Vec2D<T> {
         // }
     }
 
-    fn set(&mut self, x: usize, y: usize, val: T) {
+    fn fold_by_indent(&mut self, indent: usize) {
+        let rows = self.3.split_off(0);
+        let mut last_index = 0;
+        for mut row in rows {
+            // Calculate indent
+            let row_indent = row.iter().take_while(|&x| x.0 == ' ' || x.0 == '\t').count();
+            if row_indent <= indent {
+                self.3.push(row);
+                last_index = self.3.len() - 1;
+            } else {
+                // Set underline for previous line.
+                self.3.get_mut(last_index).map(|row| {
+                    row.iter_mut().for_each(|x| {
+                        x.2 = true;
+                    });
+                });
+            }
+        }
+        self.1 = self.3.len();
+    }
+
+    fn set(&mut self, x: usize, y: usize, val: RagerChar) {
         if y >= self.height() {
             for _ in 0..(y - self.height() + 1) {
                 self.expand_vertical();
@@ -75,7 +86,7 @@ impl<T: Copy> Vec2D<T> {
         self.3[y][x] = val;
     }
 
-    fn get(&self, x: usize, y: usize) -> T {
+    fn get(&self, x: usize, y: usize) -> RagerChar {
         self.3[y][x]
     }
 
@@ -112,24 +123,20 @@ fn run() -> Result<(), Error> {
             Some(ret)
         }
     } else {
+        // TODO load a file from a command line argument here
         None
     };
 
     let mut screen = MouseTerminal::from(AlternateScreen::from(stdout().into_raw_mode().unwrap()));
+    
     write!(screen, "{}", termion::cursor::Hide).unwrap();
-    // write_alt_screen_msg(&mut screen);
-
     write!(screen, "{}", termion::clear::All).unwrap();
-
     screen.flush().unwrap();
 
-    // Load the file
-    // let mut file = File::open("test")?;
-    // let mut contents = vec![];
-    // file.read_to_end(&mut contents)?;
-
     // Create the ransid terminal
-    let (width, height) = terminal_size().unwrap();
+    let (screen_width, screen_height) = terminal_size().unwrap();
+    let screen_width = screen_width as usize;
+    let screen_height = screen_height as usize;
 
     type MyTerminal = MouseTerminal<AlternateScreen<RawTerminal<Stdout>>>;
 
@@ -138,16 +145,18 @@ fn run() -> Result<(), Error> {
         // let screen = screen.clone();
         let tx = tx.clone();
         move || {
-            let mut console = ransid::Console::new(width as usize, 32767);
+            let mut console = ransid::Console::new(screen_width, 32767);
 
-            let mut matrix = Vec2D::new(width as usize, height as usize, RagerChar(' ', false, false, ransid::color::Color::Ansi(0)));
+            let mut matrix = Buffer::new(screen_width, screen_height, RagerChar(' ', false, false, ransid::color::Color::Ansi(0)));
+
+            let mut original_matrix = None;
 
             fn write_char(screen: &mut MyTerminal, c: RagerChar, x: usize, y: usize) {
-                // ::std::thread::sleep(::std::time::Duration::from_millis(1));
                 write!(screen,
-                    "{}{}{}{}{}",
+                    "{}{}{}{}{}{}",
                     termion::cursor::Goto((x as u16) + 1, (y as u16) + 1),
                     if c.1 { format!("{}", termion::style::Bold) } else { format!("") },
+                    if c.2 { format!("{}", termion::style::Underline) } else { format!("") },
                     match c.3 {
                         ransid::color::Color::Ansi(c) => format!("{}", termion::color::Fg(termion::color::AnsiValue(c))),
                         ransid::color::Color::TrueColor(r, g, b) => format!("{}", termion::color::Fg(termion::color::Rgb(r, g, b))),
@@ -157,30 +166,81 @@ fn run() -> Result<(), Error> {
                 );
             }
 
-            let update = |screen: &mut MyTerminal, matrix: &mut Vec2D<RagerChar>, c, x, y, bold, underlined, color| {
+            fn write_row(screen: &mut MyTerminal, buffer: &Buffer, row: usize, dest_row: usize) {
+                let matrix_width = buffer.width() as usize;
+                for x in 0..matrix_width {
+                    write_char(screen, buffer.get(x, row), x, dest_row);
+                }
+            }
+
+            let redraw_from = |screen: &mut MyTerminal, buffer: &Buffer, row: usize| {
+                for y in 0..screen_height {
+                    write_row(screen, buffer, row + y, y);
+                }
+            };
+
+            let update = |screen: &mut MyTerminal, matrix: &mut Buffer, c, x, y, bold, underlined, color| {
                 
                 let c = RagerChar(c, bold, underlined, color);
                 matrix.set(x, y, c);
                 
-                if y < (height as usize) {
+                if y < screen_height {
                     write_char(screen, c, x, y);
                 }
             };
 
+            const INDENT_STEP: usize = 2;
+
+            let mut indent: usize = 0;
             let mut scroll: usize = 0;
             while let Ok(event) = rx.recv() {
-                // let screen = Arc::new(RefCell::new(screen));
-
-                // TODO
-                // screen.borrow_mut().flush().unwrap();
                 match event {
+                    // These only work after file's been loaded
+                    RagerEvent::IncreaseFold => {
+                        if indent == 0 {
+                            original_matrix = Some(matrix.clone());
+                        } else {
+                            matrix = original_matrix.clone().unwrap();
+                        }
+
+                        indent += INDENT_STEP;
+                        matrix.fold_by_indent(indent);
+                        while matrix.height() <= screen_height {
+                            matrix.expand_vertical();
+                        }
+                        scroll = 0;
+                        redraw_from(&mut screen, &matrix, 0);
+                    }
+                    RagerEvent::DecreaseFold => {
+                        if indent > 0 {
+                            indent -= INDENT_STEP;
+
+                            if indent == 0 {
+                                matrix = original_matrix.take().unwrap();
+                            } else if indent > 1 {
+                                matrix = original_matrix.clone().unwrap();
+                                matrix.fold_by_indent(indent);
+                                while matrix.height() <= screen_height {
+                                    matrix.expand_vertical();
+                                }
+                            }
+                            scroll = 0;
+                            redraw_from(&mut screen, &matrix, 0);
+                        }
+                    }
+
                     RagerEvent::Line(line) => {
                         let tx = tx.clone();
+
+                        // console.write doesn't need to take ownership of captured
+                        // internal values, but it wants to. Here we do some unsafe
+                        // casting to make it work.
+                        // TODO if we can cast the closure reference instead, that
+                        // would be cleaner. Or upstream a patch to ransid.                        
                         unsafe {
                             let screen: &'static mut MyTerminal = ::std::mem::transmute(&mut screen);
-                            let matrix: &'static mut Vec2D<RagerChar> = ::std::mem::transmute(&mut matrix);
+                            let matrix: &'static mut Buffer = ::std::mem::transmute(&mut matrix);
                             console.write(&line, move |event| {
-                                // TODO this should have a fix right here for the closure to fit into a non-static content, instead of transmuting the value
                                 use ransid::Event;
                                 match event {
                                     Event::Char {
@@ -205,27 +265,15 @@ fn run() -> Result<(), Error> {
                             write!(screen, "{}", scroll::Down(1)).unwrap();
 
                             scroll -= 1;
-
-                            // Draw row
-                            let matrix_width = matrix.width() as usize;
-                            let matrix_height = matrix.height() as usize;
-                            for x in 0..matrix_width {
-                                write_char(&mut screen, matrix.get(x, scroll), x, 0);
-                            }
+                            write_row(&mut screen, &matrix, scroll, 0);
                         }
                     }
                     RagerEvent::ScrollUp => {
-                        if scroll + (height as usize) < matrix.height() - 1 {
+                        if scroll + screen_height < matrix.height() - 1 {
                             write!(screen, "{}", scroll::Up(1)).unwrap();
 
                             scroll += 1;
-
-                            // Draw row
-                            let matrix_width = matrix.width() as usize;
-                            let matrix_height = matrix.height() as usize;
-                            for x in 0..matrix_width {
-                                write_char(&mut screen, matrix.get(x, scroll + height as usize), x, matrix_height);
-                            }
+                            write_row(&mut screen, &matrix, scroll + screen_height, matrix.height() as usize);
                         }
 
                     }
@@ -257,21 +305,28 @@ fn run() -> Result<(), Error> {
         match c.unwrap() {
             Event::Key(Key::Char('q')) |
             Event::Key(Key::Ctrl('c')) => break,
+
             Event::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) | 
             Event::Key(Key::Down) => {
                 let _ = tx.send(RagerEvent::ScrollUp);
-                // write!(screen.borrow_mut(), "{}", scroll::Up(1)).unwrap();
             }
+            
             Event::Mouse(MouseEvent::Press(MouseButton::WheelUp, _, _)) |
             Event::Key(Key::Up) => {
                 let _ = tx.send(RagerEvent::ScrollDown);
-                // write!(screen.borrow_mut(), "{}", scroll::Down(1)).unwrap();
             }
+
+            Event::Key(Key::Char('>')) => {
+                let _ = tx.send(RagerEvent::IncreaseFold);
+            }
+            Event::Key(Key::Char('<')) => {
+                let _ = tx.send(RagerEvent::DecreaseFold);
+            }
+
             c => {
-                // write!(screen.borrow_mut(), "\r\n{:?}", c).unwrap();
+                // eprintln!("got: {:?}", c);
             }
         }
-        // screen.borrow_mut().flush().unwrap();
     }
 
     let _ = tx.send(RagerEvent::Quit);
