@@ -1,9 +1,13 @@
+#[macro_use]
+extern crate structopt;
 extern crate termion;
 extern crate ransid;
 extern crate failure;
 extern crate libc;
 extern crate crossbeam_channel;
 
+use std::path::PathBuf;
+use structopt::StructOpt;
 use failure::Error;
 use termion::event::*;
 use termion::scroll;
@@ -16,26 +20,16 @@ use crossbeam_channel::unbounded;
 
 use std::fs::File;
 use std::io::prelude::*;
-// use std::cell::RefCell;
 use std::io::BufReader;
-// use std::sync::Arc;
 use termion::raw::RawTerminal;
-
-// fn write_alt_screen_msg<W: Write>(screen: &mut W) {
-//     write!(screen, "{}{}Welcome to the alternate screen.{}Press '1' to switch to the main screen or '2' to switch to the alternate screen.{}Press 'q' to exit (and switch back to the main screen).",
-//            termion::clear::All,
-//            termion::cursor::Goto(1, 1),
-//            termion::cursor::Goto(1, 3),
-//            termion::cursor::Goto(1, 4)).unwrap();
-// }
 
 enum RagerEvent {
     Line(Vec<u8>),
-    // Char(char, usize, usize, bool, bool, ransid::color::Color),
     ScrollDown,
     ScrollUp,
     Quit,
-    // Resize
+    EndInput,
+    // Resize TODO
 }
 
 
@@ -57,8 +51,6 @@ impl<T: Copy> Vec2D<T> {
     fn expand_vertical(&mut self) {
         let width = self.0;
         let height = self.1;
-        // let new_height = ((height as f32) * 1.4) as usize;;
-        // self.1 = new_height;
         self.1 += 1;
 
         // for _ in 0..(new_height - height) {
@@ -87,12 +79,21 @@ impl<T: Copy> Vec2D<T> {
         self.1
     }
 }
-
-fn main() {
-    run().expect("Program error");
+#[derive(Debug, StructOpt)]
+#[structopt(name = "rager", about = "A pager, like more or less.")]
+struct Opt {
+    #[structopt(parse(from_os_str))]
+    input: Option<PathBuf>,
 }
 
-fn run() -> Result<(), Error> {
+fn main() {
+    let opt = Opt::from_args();
+    run(opt.input).expect("Program error");
+}
+
+fn run(
+    input_file: Option<PathBuf>,
+) -> Result<(), Error> {
     let stdin = stdin();
 
     // Swap stdin and TTY
@@ -109,24 +110,26 @@ fn run() -> Result<(), Error> {
 
             libc::dup2(tty.as_raw_fd(), 0);
 
+            ::std::mem::forget(tty);
+
             Some(ret)
         }
+    } else if let Some(input_file) = input_file {
+        // Must have a filename as input.
+        let file = File::open(input_file)?;
+        Some(file)
     } else {
-        None
+        // Print error.
+        eprintln!("Expected 'rager <input>' or input over stdin.");
+        ::std::process::exit(1);
     };
 
     let mut screen = MouseTerminal::from(AlternateScreen::from(stdout().into_raw_mode().unwrap()));
+    
     write!(screen, "{}", termion::cursor::Hide).unwrap();
-    // write_alt_screen_msg(&mut screen);
-
     write!(screen, "{}", termion::clear::All).unwrap();
 
     screen.flush().unwrap();
-
-    // Load the file
-    // let mut file = File::open("test")?;
-    // let mut contents = vec![];
-    // file.read_to_end(&mut contents)?;
 
     // Create the ransid terminal
     let (width, height) = terminal_size().unwrap();
@@ -169,10 +172,6 @@ fn run() -> Result<(), Error> {
 
             let mut scroll: usize = 0;
             while let Ok(event) = rx.recv() {
-                // let screen = Arc::new(RefCell::new(screen));
-
-                // TODO
-                // screen.borrow_mut().flush().unwrap();
                 match event {
                     RagerEvent::Line(line) => {
                         let tx = tx.clone();
@@ -199,6 +198,14 @@ fn run() -> Result<(), Error> {
                                 }
                             });
                         }
+                    }
+                    RagerEvent::EndInput => {
+                        // TODO Draw row
+                        // let matrix_width = matrix.width() as usize;
+                        // let matrix_height = matrix.height() as usize;
+                        // for x in 0..matrix_width {
+                        //     write_char(&mut screen, RagerChar('~', false, false, ransid::color::Color::Ansi(15)), x, matrix_height);
+                        // }
                     }
                     RagerEvent::ScrollDown => {
                         if scroll > 0 {
@@ -243,12 +250,19 @@ fn run() -> Result<(), Error> {
         ::std::thread::spawn({
             let tx = tx.clone();
             let mut input = BufReader::new(input.unwrap());
-            let mut buf = vec![];
+            let mut buf = String::new();
             move || {
-                while let Ok(len) = input.read_until(0xA, &mut buf)  {
-                    let _ = tx.send(RagerEvent::Line(buf.clone()));
+                // TODO read_until pegs CPU at 100% without a sleep there
+                while let Ok(len) = ::std::io::BufRead::read_line(&mut input, &mut buf) {
+                    if len == 0 {
+                        break;
+                    }
+
+                    let _ = tx.send(RagerEvent::Line(buf.as_bytes().to_owned()));
                     buf.clear();
                 }
+
+                tx.send(RagerEvent::EndInput);
             }
         });
     }
@@ -265,13 +279,9 @@ fn run() -> Result<(), Error> {
             Event::Mouse(MouseEvent::Press(MouseButton::WheelUp, _, _)) |
             Event::Key(Key::Up) => {
                 let _ = tx.send(RagerEvent::ScrollDown);
-                // write!(screen.borrow_mut(), "{}", scroll::Down(1)).unwrap();
             }
-            c => {
-                // write!(screen.borrow_mut(), "\r\n{:?}", c).unwrap();
-            }
+            _ => {},
         }
-        // screen.borrow_mut().flush().unwrap();
     }
 
     let _ = tx.send(RagerEvent::Quit);
