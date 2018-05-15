@@ -28,6 +28,10 @@ enum RagerEvent {
     ScrollUp,
     Quit,
     EndInput,
+    Home,
+    End,
+    PageUp,
+    PageDown,
     // Resize TODO
 }
 
@@ -35,11 +39,11 @@ enum RagerEvent {
 #[derive(Copy, Clone)]
 struct RagerChar(char, bool, bool, ransid::color::Color);
 
-struct Vec2D<T>(usize, usize, T, Vec<Vec<T>>);
+struct Buffer(usize, usize, RagerChar, Vec<Vec<RagerChar>>);
 
-impl<T: Copy> Vec2D<T> {
-    fn new(width: usize, height: usize, default: T) -> Vec2D<T> {
-        Vec2D(
+impl Buffer {
+    fn new(width: usize, height: usize, default: RagerChar) -> Buffer {
+        Buffer(
             width,
             height,
             default,
@@ -56,7 +60,7 @@ impl<T: Copy> Vec2D<T> {
         // }
     }
 
-    fn set(&mut self, x: usize, y: usize, val: T) {
+    fn set(&mut self, x: usize, y: usize, val: RagerChar) {
         if y >= self.height() {
             for _ in 0..(y - self.height() + 1) {
                 self.expand_vertical();
@@ -65,7 +69,7 @@ impl<T: Copy> Vec2D<T> {
         self.3[y][x] = val;
     }
 
-    fn get(&self, x: usize, y: usize) -> T {
+    fn get(&self, x: usize, y: usize) -> RagerChar {
         self.3[y][x]
     }
 
@@ -130,7 +134,9 @@ fn run(
     screen.flush().unwrap();
 
     // Create the ransid terminal
-    let (width, height) = terminal_size().unwrap();
+    let (screen_width, screen_height) = terminal_size().unwrap();
+    let screen_width = screen_width as usize;
+    let screen_height = screen_height as usize;
 
     type MyTerminal = MouseTerminal<AlternateScreen<RawTerminal<Stdout>>>;
 
@@ -138,9 +144,9 @@ fn run(
     let actor = ::std::thread::spawn({
         // let screen = screen.clone();
         move || {
-            let mut console = ransid::Console::new(width as usize, 32767);
+            let mut console = ransid::Console::new(screen_width, 32767);
 
-            let mut matrix = Vec2D::new(width as usize, height as usize, RagerChar(' ', false, false, ransid::color::Color::Ansi(0)));
+            let mut matrix = Buffer::new(screen_width, screen_height, RagerChar(' ', false, false, ransid::color::Color::Ansi(0)));
 
             fn write_char(screen: &mut MyTerminal, c: RagerChar, x: usize, y: usize) {
                 // ::std::thread::sleep(::std::time::Duration::from_millis(1));
@@ -157,12 +163,25 @@ fn run(
                 );
             }
 
-            let update = |screen: &mut MyTerminal, matrix: &mut Vec2D<RagerChar>, c, x, y, bold, underlined, color| {
+            fn write_row(screen: &mut MyTerminal, buffer: &Buffer, row: usize, dest_row: usize) {
+                let matrix_width = buffer.width() as usize;
+                for x in 0..matrix_width {
+                    write_char(screen, buffer.get(x, row), x, dest_row);
+                }
+            }
+
+            let redraw_from = |screen: &mut MyTerminal, buffer: &Buffer, row: usize| {
+                for y in 0..screen_height {
+                    write_row(screen, buffer, row + y, y);
+                }
+            };
+
+            let update = |screen: &mut MyTerminal, matrix: &mut Buffer, c, x, y, bold, underlined, color| {
                 
                 let c = RagerChar(c, bold, underlined, color);
                 matrix.set(x, y, c);
                 
-                if y < (height as usize) {
+                if y < (screen_height as usize) {
                     write_char(screen, c, x, y);
                 }
             };
@@ -170,10 +189,28 @@ fn run(
             let mut scroll: usize = 0;
             while let Ok(event) = rx.recv() {
                 match event {
+                    RagerEvent::Home => {
+                        scroll = 0;
+                        redraw_from(&mut screen, &mut matrix, scroll);
+                    }
+                    RagerEvent::End => {
+                        scroll = matrix.height() - screen_height;
+                        redraw_from(&mut screen, &mut matrix, scroll);
+                    }
+                    RagerEvent::PageUp => {
+                        scroll = if scroll <= screen_height { 0 } else { scroll - screen_height };
+                        redraw_from(&mut screen, &mut matrix, scroll);
+                    }
+                    RagerEvent::PageDown => {
+                        let last_row = matrix.height() - screen_height;
+                        let next_row = scroll + screen_height;
+                        scroll = if next_row >= last_row { last_row } else { next_row };
+                        redraw_from(&mut screen, &mut matrix, scroll);
+                    }
                     RagerEvent::Line(line) => {
                         unsafe {
                             let screen: &'static mut MyTerminal = ::std::mem::transmute(&mut screen);
-                            let matrix: &'static mut Vec2D<RagerChar> = ::std::mem::transmute(&mut matrix);
+                            let matrix: &'static mut Buffer = ::std::mem::transmute(&mut matrix);
                             console.write(&line, move |event| {
                                 // TODO this should have a fix right here for the closure to fit into a non-static content, instead of transmuting the value
                                 use ransid::Event;
@@ -217,7 +254,7 @@ fn run(
                         }
                     }
                     RagerEvent::ScrollUp => {
-                        if scroll + (height as usize) < matrix.height() - 1 {
+                        if scroll + (screen_height as usize) < matrix.height() - 1 {
                             write!(screen, "{}", scroll::Up(1)).unwrap();
 
                             scroll += 1;
@@ -226,7 +263,7 @@ fn run(
                             let matrix_width = matrix.width() as usize;
                             let matrix_height = matrix.height() as usize;
                             for x in 0..matrix_width {
-                                write_char(&mut screen, matrix.get(x, scroll + height as usize), x, matrix_height);
+                                write_char(&mut screen, matrix.get(x, scroll + screen_height as usize), x, matrix_height);
                             }
                         }
 
@@ -275,7 +312,22 @@ fn run(
             Event::Key(Key::Up) => {
                 let _ = tx.send(RagerEvent::ScrollDown);
             }
+            Event::Key(Key::Home) => {
+                let _ = tx.send(RagerEvent::Home);
+            }
+            Event::Key(Key::End) => {
+                let _ = tx.send(RagerEvent::End);
+            }
+            Event::Key(Key::PageUp) => {
+                let _ = tx.send(RagerEvent::PageUp);
+            }
+            Event::Key(Key::PageDown) => {
+                let _ = tx.send(RagerEvent::PageDown);
+            }
             _ => {},
+            // c => {
+            //     println!("\r\n$\r\n{:?}", c);
+            // }
         }
     }
 
