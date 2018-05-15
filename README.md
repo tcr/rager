@@ -6,7 +6,7 @@ A terminal Pager written in Rust. Like more or less.
 
 * Supports any `xterm`-supporting terminal thanks to Termion.
 * Support mouse scrolling (or up/down keys)
-* Only supports content over stdin (for now).
+* Supports content over stdin or passed in as a filename.
 * `q` or Ctrl+C to quit.
 
 ```

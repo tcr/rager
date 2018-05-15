@@ -19,7 +19,6 @@ use std::io::{Write, stdout, stdin, Stdout};
 use crossbeam_channel::unbounded;
 
 use std::fs::File;
-use std::io::prelude::*;
 use std::io::BufReader;
 use termion::raw::RawTerminal;
 
@@ -44,13 +43,12 @@ impl<T: Copy> Vec2D<T> {
             width,
             height,
             default,
-            (0..height).map(|x| vec![default; width]).collect::<Vec<_>>(),
+            (0..height).map(|_| vec![default; width]).collect::<Vec<_>>(),
         )
     }
 
     fn expand_vertical(&mut self) {
         let width = self.0;
-        let height = self.1;
         self.1 += 1;
 
         // for _ in 0..(new_height - height) {
@@ -80,7 +78,7 @@ impl<T: Copy> Vec2D<T> {
     }
 }
 #[derive(Debug, StructOpt)]
-#[structopt(name = "rager", about = "A pager, like more or less.")]
+#[structopt(name = "rager", about = "A pager, like more or less.", author = "")]
 struct Opt {
     #[structopt(parse(from_os_str))]
     input: Option<PathBuf>,
@@ -97,7 +95,7 @@ fn run(
     let stdin = stdin();
 
     // Swap stdin and TTY
-    let mut input = if !termion::is_tty(&stdin) {
+    let input = if !termion::is_tty(&stdin) {
         // https://stackoverflow.com/a/29694013
         unsafe {
             use std::os::unix::io::*;
@@ -139,7 +137,6 @@ fn run(
     let (tx, rx) = unbounded();
     let actor = ::std::thread::spawn({
         // let screen = screen.clone();
-        let tx = tx.clone();
         move || {
             let mut console = ransid::Console::new(width as usize, 32767);
 
@@ -147,7 +144,7 @@ fn run(
 
             fn write_char(screen: &mut MyTerminal, c: RagerChar, x: usize, y: usize) {
                 // ::std::thread::sleep(::std::time::Duration::from_millis(1));
-                write!(screen,
+                let _ = write!(screen,
                     "{}{}{}{}{}",
                     termion::cursor::Goto((x as u16) + 1, (y as u16) + 1),
                     if c.1 { format!("{}", termion::style::Bold) } else { format!("") },
@@ -174,7 +171,6 @@ fn run(
             while let Ok(event) = rx.recv() {
                 match event {
                     RagerEvent::Line(line) => {
-                        let tx = tx.clone();
                         unsafe {
                             let screen: &'static mut MyTerminal = ::std::mem::transmute(&mut screen);
                             let matrix: &'static mut Vec2D<RagerChar> = ::std::mem::transmute(&mut matrix);
@@ -215,7 +211,6 @@ fn run(
 
                             // Draw row
                             let matrix_width = matrix.width() as usize;
-                            let matrix_height = matrix.height() as usize;
                             for x in 0..matrix_width {
                                 write_char(&mut screen, matrix.get(x, scroll), x, 0);
                             }
@@ -262,7 +257,7 @@ fn run(
                     buf.clear();
                 }
 
-                tx.send(RagerEvent::EndInput);
+                let _ = tx.send(RagerEvent::EndInput);
             }
         });
     }
@@ -286,7 +281,7 @@ fn run(
 
     let _ = tx.send(RagerEvent::Quit);
 
-    actor.join();
+    let _ = actor.join();
 
     Ok(())
 }
