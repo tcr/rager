@@ -12,6 +12,6 @@ readme = "README.md"
 crossbeam-channel = "0.1.2"
 failure = "0.1.1"
 libc = "0.2.40"
-ransid = "0.4.6"
+ransid = { git = "https://github.com/E5ten/ransid" }
 termion = "1.5.1"
 structopt = "0.2.8"
