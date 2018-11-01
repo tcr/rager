@@ -37,7 +37,7 @@ enum RagerEvent {
 
 
 #[derive(Copy, Clone)]
-struct RagerChar(char, bool, bool, ransid::color::Color);
+struct RagerChar(char, bool, bool, bool, ransid::color::Color);
 
 struct Buffer(usize, usize, RagerChar, Vec<Vec<RagerChar>>);
 
@@ -146,7 +146,7 @@ fn run(
         move || {
             let mut console = ransid::Console::new(screen_width, 32767);
 
-            let mut matrix = Buffer::new(screen_width, screen_height, RagerChar(' ', false, false, ransid::color::Color::Ansi(0)));
+            let mut matrix = Buffer::new(screen_width, screen_height, RagerChar(' ', false, false, false, ransid::color::Color::Ansi(0)));
 
             fn write_char(screen: &mut MyTerminal, c: RagerChar, x: usize, y: usize) {
                 // ::std::thread::sleep(::std::time::Duration::from_millis(1));
@@ -154,7 +154,7 @@ fn run(
                     "{}{}{}{}{}",
                     termion::cursor::Goto((x as u16) + 1, (y as u16) + 1),
                     if c.1 { format!("{}", termion::style::Bold) } else { format!("") },
-                    match c.3 {
+                    match c.4 {
                         ransid::color::Color::Ansi(c) => format!("{}", termion::color::Fg(termion::color::AnsiValue(c))),
                         ransid::color::Color::TrueColor(r, g, b) => format!("{}", termion::color::Fg(termion::color::Rgb(r, g, b))),
                     },
@@ -176,9 +176,9 @@ fn run(
                 }
             };
 
-            let update = |screen: &mut MyTerminal, matrix: &mut Buffer, c, x, y, bold, underlined, color| {
+            let update = |screen: &mut MyTerminal, matrix: &mut Buffer, c, x, y, bold, underlined, italic, color| {
                 
-                let c = RagerChar(c, bold, underlined, color);
+                let c = RagerChar(c, bold, underlined, italic, color);
                 matrix.set(x, y, c);
                 
                 if y < (screen_height as usize) {
@@ -221,9 +221,10 @@ fn run(
                                         c,
                                         bold,
                                         underlined,
+                                        italic,
                                         color,
                                     } => {
-                                        update(screen, matrix, c, x, y, bold, underlined, color);
+                                        update(screen, matrix, c, x, y, bold, underlined, italic, color);
                                     },
 
                                     // Ignore all other event types.
