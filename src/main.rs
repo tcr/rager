@@ -151,9 +151,11 @@ fn run(
             fn write_char(screen: &mut MyTerminal, c: RagerChar, x: usize, y: usize) {
                 // ::std::thread::sleep(::std::time::Duration::from_millis(1));
                 let _ = write!(screen,
-                    "{}{}{}{}{}",
+                    "{}{}{}{}{}{}{}",
                     termion::cursor::Goto((x as u16) + 1, (y as u16) + 1),
                     if c.1 { format!("{}", termion::style::Bold) } else { format!("") },
+                    if c.2 { format!("{}", termion::style::Underline) } else { format!("") },
+                    if c.3 { format!("{}", termion::style::Italic) } else { format!("") },
                     match c.4 {
                         ransid::color::Color::Ansi(c) => format!("{}", termion::color::Fg(termion::color::AnsiValue(c))),
                         ransid::color::Color::TrueColor(r, g, b) => format!("{}", termion::color::Fg(termion::color::Rgb(r, g, b))),
