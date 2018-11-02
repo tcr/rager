@@ -299,6 +299,7 @@ fn run(
         });
     }
 
+    // tracking gg vim keybind
     let mut pressed_g = 'n';
 
     for c in stdin.events() {
