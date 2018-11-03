@@ -1,3 +1,4 @@
+#[macro_use]
 extern crate structopt;
 extern crate termion;
 extern crate ransid;
@@ -303,7 +304,7 @@ fn run(
         });
     }
 
-    // tracking gg vim keybind
+    // tracking gg vim keybind that triggers Home RagerEvent
     let mut pressed_g: usize = 0;
 
     for c in stdin.events() {
