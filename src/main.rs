@@ -304,6 +304,9 @@ fn run(
         });
     }
 
+    // tracking gg vim keybind that triggers Home RagerEvent
+    let mut pressed_g: usize = 0;
+
     for c in stdin.events() {
         match c.unwrap() {
             Event::Key(Key::Char('q')) |
@@ -311,23 +314,55 @@ fn run(
             Event::Mouse(MouseEvent::Press(MouseButton::WheelDown, _, _)) | 
             Event::Key(Key::Down) => {
                 let _ = tx.send(RagerEvent::ScrollUp);
+                pressed_g = 0;
                 // write!(screen.borrow_mut(), "{}", scroll::Up(1)).unwrap();
+            }
+            Event::Key(Key::Char('j')) => {
+                let _ = tx.send(RagerEvent::ScrollUp);
+                pressed_g = 0;
             }
             Event::Mouse(MouseEvent::Press(MouseButton::WheelUp, _, _)) |
             Event::Key(Key::Up) => {
                 let _ = tx.send(RagerEvent::ScrollDown);
             }
+            Event::Key(Key::Char('k')) => {
+                let _ = tx.send(RagerEvent::ScrollDown);
+                pressed_g = 0;
+            }
             Event::Key(Key::Home) => {
                 let _ = tx.send(RagerEvent::Home);
+                pressed_g = 0;
+            }
+            Event::Key(Key::Char('g')) => {
+                pressed_g = pressed_g+1;
+                if pressed_g == 2 {
+                    pressed_g = 0;
+                    let _ = tx.send(RagerEvent::Home);
+                }
             }
             Event::Key(Key::End) => {
                 let _ = tx.send(RagerEvent::End);
+                pressed_g = 0;
+            }
+            Event::Key(Key::Char('G')) => {
+                let _ = tx.send(RagerEvent::End);
+                pressed_g = 0;
             }
             Event::Key(Key::PageUp) => {
                 let _ = tx.send(RagerEvent::PageUp);
+                pressed_g = 0;
+            }
+            Event::Key(Key::Ctrl('B')) => {
+                let _ = tx.send(RagerEvent::PageUp);
+                pressed_g = 0;
             }
             Event::Key(Key::PageDown) => {
                 let _ = tx.send(RagerEvent::PageDown);
+                pressed_g = 0;
+            }
+            Event::Key(Key::Ctrl('F')) => {
+                let _ = tx.send(RagerEvent::PageDown);
+                pressed_g = 0;
             }
             _ => {},
             // c => {
